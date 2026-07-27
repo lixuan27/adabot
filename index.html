@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AdaBot — Closed-loop inference for robot runtime adaptation</title>
+<meta name="description" content="A frozen manipulation policy, adapted at inference time. No gradients. The loop is the variable.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500;6..96,700&family=Spectral:ital,wght@0,300;0,400;0,600;1,400&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --plaster:#DEDAD2;
+  --chalk:#EBE8E2;
+  --linen:#F2F0EB;
+  --ink:#14120F;
+  --ink-2:#3D3934;
+  --rule:#C2BCB0;
+  --rule-2:#D2CCC1;
+  --sage:#77896F;
+  --clay:#A2736B;
+  --lilac:#8B8795;
+  --dust:#6E808E;
+  --display:"Bodoni Moda",Didot,"Playfair Display",Georgia,serif;
+  --body:"Spectral","Iowan Old Style",Georgia,serif;
+  --tele:"Courier Prime","Courier New",monospace;
+  --rail:56px;
+  --pad:clamp(1.4rem,4vw,4rem);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:20px;-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{
+  background:var(--plaster);color:var(--ink);
+  font-family:var(--body);font-weight:400;line-height:1.62;
+  font-size:1rem;padding-left:var(--rail);
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--sage);color:var(--linen)}
+
+/* ── calibration rail ───────────────────────────────── */
+.rail{
+  position:fixed;left:0;top:0;bottom:0;width:var(--rail);
+  border-right:1px solid var(--rule);background:var(--chalk);z-index:60;
+  display:flex;flex-direction:column;justify-content:space-between;align-items:center;
+  padding:1.1rem 0;
+}
+.rail-ticks{position:absolute;inset:0;pointer-events:none}
+.rail-ticks i{position:absolute;right:0;height:1px;background:var(--rule);width:9px;opacity:.75}
+.rail-ticks i.maj{width:18px;opacity:1}
+.rail-mark{
+  writing-mode:vertical-rl;font-family:var(--tele);font-size:.78rem;
+  letter-spacing:.34em;text-transform:uppercase;color:var(--ink-2);
+  background:var(--chalk);padding:.7rem 0;z-index:2;
+}
+.rail-dot{width:9px;height:9px;border-radius:50%;background:var(--ink);z-index:2}
+
+/* ── nav ────────────────────────────────────────────── */
+header{
+  position:sticky;top:0;z-index:50;background:rgba(222,218,210,.93);
+  backdrop-filter:blur(9px);border-bottom:1px solid var(--rule);
+}
+.bar{display:flex;align-items:baseline;justify-content:space-between;gap:1.4rem;
+  padding:.85rem var(--pad);flex-wrap:wrap}
+.brand{font-family:var(--display);font-size:1.5rem;font-weight:700;letter-spacing:.01em}
+.brand span{font-family:var(--tele);font-size:.78rem;font-weight:400;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--ink-2);margin-left:.85rem}
+nav{display:flex;gap:.35rem;flex-wrap:wrap}
+.tab{
+  font-family:var(--tele);font-size:.82rem;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--ink-2);background:none;border:0;cursor:pointer;
+  padding:.5rem .8rem;border-bottom:2px solid transparent;transition:.22s;
+}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink);font-weight:700}
+.tab:focus-visible,button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--dust);outline-offset:3px}
+
+/* ── page shell ─────────────────────────────────────── */
+main{max-width:1220px;margin:0 auto;padding:0 var(--pad) 7rem}
+.page{display:none;animation:rise .42s cubic-bezier(.2,.7,.3,1) both}
+.page.on{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+section{padding:4.2rem 0;border-bottom:1px solid var(--rule-2)}
+section:last-child{border-bottom:0}
+.eyebrow{font-family:var(--tele);font-size:.82rem;letter-spacing:.26em;text-transform:uppercase;
+  color:var(--ink-2);margin-bottom:1.1rem;display:block}
+h1{font-family:var(--display);font-weight:400;font-size:clamp(2.9rem,7.2vw,5.6rem);
+  line-height:1.02;letter-spacing:-.015em;margin:.2rem 0 1.5rem;max-width:16ch}
+h2{font-family:var(--display);font-weight:400;font-size:clamp(2rem,4vw,3.1rem);
+  line-height:1.1;letter-spacing:-.01em;margin-bottom:1.4rem;max-width:22ch}
+h3{font-family:var(--display);font-weight:500;font-size:1.5rem;line-height:1.2;margin-bottom:.55rem}
+p{max-width:62ch;margin-bottom:1.1rem}
+.lede{font-size:1.32rem;line-height:1.52;max-width:44ch}
+.big{font-size:1.16rem;line-height:1.62}
+em{font-style:italic}
+strong{font-weight:600}
+.tele{font-family:var(--tele);font-size:.86rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2)}
+
+/* ── hero ───────────────────────────────────────────── */
+.hero{padding-top:3.4rem;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);
+  gap:clamp(1.8rem,4vw,4rem);align-items:end}
+.hero-fig{background:var(--linen);border:1px solid var(--rule);padding:1.5rem 1.5rem 1.1rem}
+.figcap{display:flex;justify-content:space-between;gap:1rem;align-items:baseline;
+  border-bottom:1px solid var(--rule);padding-bottom:.6rem;margin-bottom:1.2rem;flex-wrap:wrap}
+.figcap h3{font-size:1.18rem;margin:0}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.btn{
+  font-family:var(--tele);font-size:.84rem;letter-spacing:.14em;text-transform:uppercase;
+  background:var(--ink);color:var(--linen);border:1px solid var(--ink);
+  padding:.62rem 1.1rem;cursor:pointer;transition:.2s;
+}
+.btn:hover{background:transparent;color:var(--ink)}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn.ghost:hover{background:var(--ink);color:var(--linen)}
+.btn[disabled]{opacity:.35;cursor:default}
+.btn.on{background:var(--sage);border-color:var(--sage);color:var(--linen)}
+
+/* ── generic blocks ─────────────────────────────────── */
+.quote{
+  border-left:3px solid var(--ink);padding:.2rem 0 .2rem 1.5rem;
+  font-size:1.22rem;line-height:1.55;max-width:56ch;
+}
+
+/* ── notation plate ─────────────────────────────────── */
+.plate{background:var(--linen);border:1px solid var(--ink);margin-top:2.2rem}
+.plate-h{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;
+  padding:.85rem 1.5rem;border-bottom:1px solid var(--ink);background:var(--chalk)}
+.plate-h span{font-family:var(--tele);font-size:.82rem;letter-spacing:.18em;text-transform:uppercase}
+.obj{padding:2.4rem 1.5rem;text-align:center}
+.obj .eq{font-family:var(--display);font-size:clamp(1.5rem,3.4vw,2.3rem);line-height:1.5;font-weight:400}
+.obj .eq i{font-style:italic}
+.obj .sub{font-size:.62em;vertical-align:-.32em;letter-spacing:.02em}
+.obj .sup{font-size:.62em;vertical-align:.5em}
+.obj .under{display:block;font-family:var(--tele);font-size:.8rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-2);margin-top:.55rem}
+.obj .st{font-family:var(--display);font-size:clamp(1.1rem,2.2vw,1.45rem);margin-top:1.7rem;
+  padding-top:1.4rem;border-top:1px solid var(--rule-2);display:inline-block;min-width:60%}
+.legend{border-top:1px solid var(--ink);display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:1px;background:var(--rule)}
+.legend div{background:var(--linen);padding:1.1rem 1.4rem;display:flex;gap:1rem;align-items:baseline}
+.legend b{font-family:var(--display);font-size:1.35rem;font-weight:400;min-width:3.4rem;font-style:italic}
+.legend span{font-size:.98rem;line-height:1.45}
+.grid{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(255px,1fr))}
+.cell{background:var(--linen);padding:1.5rem}
+.cell .tele{display:block;margin-bottom:.7rem}
+.cell p{font-size:.96rem;margin-bottom:0}
+
+.ledger{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule)}
+.ledger>div{background:var(--linen);padding:1.5rem}
+.ledger ul{list-style:none;margin-top:.9rem}
+.ledger li{padding:.5rem 0;border-bottom:1px solid var(--rule-2);font-size:1rem;display:flex;gap:.7rem}
+.ledger li:last-child{border-bottom:0}
+.ledger li b{font-family:var(--tele);font-size:.8rem;letter-spacing:.08em;color:var(--ink-2);
+  min-width:2.4rem;padding-top:.22rem}
+
+/* ── accordion cards ────────────────────────────────── */
+.stack{border-top:1px solid var(--rule)}
+.card{border-bottom:1px solid var(--rule);background:var(--linen)}
+.card>button{
+  width:100%;text-align:left;background:none;border:0;cursor:pointer;
+  padding:1.4rem 1.5rem;display:flex;gap:1.2rem;align-items:baseline;font:inherit;color:inherit;
+  transition:background .2s;
+}
+.card>button:hover{background:var(--chalk)}
+.card .k{font-family:var(--tele);font-size:.84rem;letter-spacing:.14em;color:var(--ink-2);min-width:3.6rem}
+.card .t{font-family:var(--display);font-size:1.42rem;line-height:1.22;flex:1}
+.card .pm{font-family:var(--tele);font-size:1.2rem;transition:transform .28s}
+.card[open] .pm{transform:rotate(45deg)}
+.card .body{max-height:0;overflow:hidden;transition:max-height .38s cubic-bezier(.3,.8,.3,1)}
+.card .inner{padding:0 1.5rem 1.6rem 6.3rem}
+.card .inner p{font-size:1.02rem}
+.card .inner .note{font-family:var(--tele);font-size:.84rem;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-2);margin-bottom:.5rem;display:block}
+@media(max-width:640px){.card .inner{padding-left:1.5rem}}
+
+/* ── chain ──────────────────────────────────────────── */
+.chain{display:flex;gap:.55rem;flex-wrap:wrap;align-items:stretch;margin:1.8rem 0 .6rem}
+.chain div{background:var(--linen);border:1px solid var(--rule);padding:.85rem 1.05rem;
+  font-family:var(--tele);font-size:.86rem;letter-spacing:.06em;text-transform:uppercase;display:flex;align-items:center}
+.chain span{align-self:center;font-size:1.2rem;color:var(--ink-2)}
+
+/* ── table ──────────────────────────────────────────── */
+table{border-collapse:collapse;width:100%;font-size:1rem}
+caption{text-align:left;font-family:var(--tele);font-size:.84rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-2);padding-bottom:.9rem}
+th,td{padding:.72rem .8rem;text-align:right;border-bottom:1px solid var(--rule-2)}
+th:first-child,td:first-child{text-align:left}
+thead th{font-family:var(--tele);font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;
+  font-weight:400;color:var(--ink-2);border-bottom:1px solid var(--ink)}
+tbody td{font-family:var(--tele);font-size:.98rem}
+tbody td:first-child{font-family:var(--body);font-size:1.02rem}
+tr.total td{border-top:1px solid var(--ink);border-bottom:0;font-weight:700;padding-top:.85rem}
+tr.total td:first-child{font-weight:600}
+.up{color:var(--sage);font-weight:700}
+.tw{overflow-x:auto}
+
+/* ── result cards ───────────────────────────────────── */
+.res{background:var(--linen);border:1px solid var(--rule);padding:1.6rem}
+.bars{margin-top:1.4rem;display:grid;gap:.75rem}
+.bar{display:grid;grid-template-columns:8.6rem 1fr 3.6rem;gap:.85rem;align-items:center;font-size:.96rem}
+.bar .lab{font-size:.96rem}
+.bar .track{height:16px;background:var(--chalk);border:1px solid var(--rule-2);position:relative}
+.bar .base{position:absolute;left:0;top:0;bottom:0;background:var(--rule);width:0;transition:width .9s cubic-bezier(.2,.8,.3,1)}
+.bar .gain{position:absolute;top:0;bottom:0;background:var(--sage);width:0;transition:width .9s cubic-bezier(.2,.8,.3,1) .16s}
+.bar .num{font-family:var(--tele);font-size:.92rem;text-align:right}
+.key{display:flex;gap:1.4rem;flex-wrap:wrap;margin-top:1.2rem;font-family:var(--tele);
+  font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2)}
+.key i{display:inline-block;width:14px;height:14px;margin-right:.45rem;vertical-align:-2px}
+
+/* ── instrument (signature) ─────────────────────────── */
+.inst{background:var(--linen);border:1px solid var(--rule)}
+.inst-top{border-bottom:1px solid var(--rule);padding:1.5rem}
+.stations{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--rule)}
+.st{background:var(--linen);padding:1.25rem;cursor:pointer;border:0;text-align:left;font:inherit;
+  color:inherit;transition:background .25s;position:relative}
+.st:hover{background:var(--chalk)}
+.st.act{background:var(--chalk)}
+.st.act::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ink)}
+.st .n{font-family:var(--tele);font-size:.78rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2)}
+.st .h{font-family:var(--display);font-size:1.3rem;margin:.35rem 0 .4rem}
+.st .d{font-size:.94rem;line-height:1.45;color:var(--ink-2)}
+.st-detail{padding:1.5rem;background:var(--chalk);border-top:1px solid var(--rule);font-size:1.02rem}
+.st-detail p{margin-bottom:.6rem;max-width:70ch}
+.st-detail p:last-child{margin-bottom:0}
+
+.tape{display:grid;grid-template-columns:minmax(210px,.85fr) minmax(0,2fr);gap:1px;background:var(--rule)}
+.tape-list{background:var(--linen);padding:1.1rem}
+.tape-list ol{list-style:none}
+.step{width:100%;text-align:left;background:none;border:0;font:inherit;color:inherit;cursor:pointer;
+  padding:.62rem .7rem;display:flex;gap:.7rem;align-items:baseline;border-left:3px solid transparent;transition:.2s}
+.step:hover{background:var(--chalk)}
+.step.act{background:var(--chalk);border-left-color:var(--ink)}
+.step .i{font-family:var(--tele);font-size:.8rem;color:var(--ink-2)}
+.step .o{font-family:var(--tele);font-size:.86rem;letter-spacing:.06em}
+.step.act .o{font-weight:700}
+.tape-view{background:var(--linen);padding:1.4rem}
+.pan{margin-bottom:1.5rem}
+.pan:last-child{margin-bottom:0}
+.pan>.tele{display:block;margin-bottom:.7rem;padding-bottom:.4rem;border-bottom:1px solid var(--rule-2)}
+.reg{width:100%;font-family:var(--tele);font-size:.9rem}
+.reg td{border-bottom:1px solid var(--rule-2);padding:.42rem .5rem;text-align:left}
+.reg td.r{text-align:right}
+.reg tr.hid td{color:var(--lilac)}
+.reg tr.held td{color:var(--sage);font-weight:700}
+.pill{font-family:var(--tele);font-size:.76rem;letter-spacing:.1em;padding:.1rem .45rem;border:1px solid currentColor}
+.sched{display:grid;gap:.55rem}
+.sr{display:grid;grid-template-columns:8.4rem 1fr 3rem;gap:.8rem;align-items:center;font-family:var(--tele);font-size:.88rem}
+.sr .tr{height:14px;background:var(--chalk);border:1px solid var(--rule-2)}
+.sr .fl{height:100%;width:0;transition:width .6s cubic-bezier(.2,.8,.3,1)}
+.sr.win .lab{font-weight:700;color:var(--ink)}
+.verdict{display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap}
+.stamp{font-family:var(--tele);font-size:1rem;letter-spacing:.2em;padding:.5rem .9rem;
+  border:2px solid currentColor;font-weight:700;white-space:nowrap}
+.stamp.v{color:var(--sage)}.stamp.r{color:var(--clay)}.stamp.u{color:var(--lilac)}.stamp.n{color:var(--ink-2);border-style:dashed}
+.vnote{flex:1;min-width:230px;font-size:1rem;line-height:1.5}
+.tape-ctl{display:flex;gap:.5rem;padding:1.1rem 1.4rem;border-top:1px solid var(--rule);
+  background:var(--chalk);align-items:center;flex-wrap:wrap}
+.tape-ctl .tele{margin-left:auto}
+@media(max-width:760px){.tape{grid-template-columns:1fr}}
+
+/* ── checklist ──────────────────────────────────────── */
+.chk{list-style:none;border-top:1px solid var(--rule)}
+.chk li{border-bottom:1px solid var(--rule);padding:1.05rem 0;display:flex;gap:1.1rem;align-items:baseline;flex-wrap:wrap}
+.chk .s{font-family:var(--tele);font-size:.78rem;letter-spacing:.12em;text-transform:uppercase;
+  padding:.16rem .55rem;border:1px solid currentColor;white-space:nowrap}
+.chk .s.done{color:var(--sage)}.chk .s.run{color:var(--dust)}.chk .s.next{color:var(--ink-2)}
+.chk .txt{flex:1;min-width:270px;font-size:1.02rem}
+
+footer{padding:3rem var(--pad) 4rem;border-top:1px solid var(--rule);
+  font-family:var(--tele);font-size:.84rem;letter-spacing:.08em;color:var(--ink-2);
+  display:flex;justify-content:space-between;gap:1.4rem;flex-wrap:wrap;max-width:1220px;margin:0 auto}
+
+@media(max-width:900px){.hero{grid-template-columns:1fr}}
+@media(max-width:640px){
+  html{font-size:18px}
+  body{padding-left:0}
+  .rail{display:none}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+
+<div class="rail" aria-hidden="true">
+  <div class="rail-ticks" id="ticks"></div>
+  <div class="rail-dot"></div>
+  <div class="rail-mark" id="railMark">The problem</div>
+  <div class="rail-dot"></div>
+</div>
+
+<header>
+  <div class="bar">
+    <div class="brand">AdaBot<span>Runtime adaptation</span></div>
+    <nav role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" aria-selected="true"  data-p="p1">The problem</button>
+      <button class="tab" role="tab" aria-selected="false" data-p="p2">Why it is hard</button>
+      <button class="tab" role="tab" aria-selected="false" data-p="p3">How it works</button>
+      <button class="tab" role="tab" aria-selected="false" data-p="p4">What it does</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ══════════════ PAGE 1 ══════════════ -->
+<div class="page on" id="p1" role="tabpanel">
+
+  <section class="hero">
+    <div>
+      <span class="eyebrow">Closed-loop inference for robot runtime adaptation</span>
+      <h1>The hands are fine. The decisions are not.</h1>
+      <p class="lede">A frozen manipulation policy solves 37% of single-step kitchen tasks. Ask it to chain those same steps toward a goal it has not seen, and it solves 0.7%.</p>
+      <p class="big">Nothing about its motor skill changed between those two numbers. What changed was the amount of deciding required. So we left the weights alone and rebuilt the loop around them.</p>
+    </div>
+
+    <div class="hero-fig">
+      <div class="figcap">
+        <h3>Success as composition depth grows</h3>
+        <span class="tele">RoboCasa365</span>
+      </div>
+      <svg viewBox="0 0 560 300" role="img" aria-label="Success rate collapses from 37.2% to 0.7% as tasks require composition; with the AdaBot runtime it holds at 49.0%, 36.4% and 28.5%.">
+        <g stroke="var(--rule)" stroke-width="1">
+          <line x1="70" y1="20"  x2="545" y2="20"/>
+          <line x1="70" y1="80"  x2="545" y2="80"/>
+          <line x1="70" y1="140" x2="545" y2="140"/>
+          <line x1="70" y1="200" x2="545" y2="200"/>
+        </g>
+        <line x1="70" y1="260" x2="545" y2="260" stroke="var(--ink)" stroke-width="1.5"/>
+        <g font-family="var(--tele)" font-size="13" fill="var(--ink-2)" text-anchor="end">
+          <text x="58" y="25">60</text><text x="58" y="85">45</text>
+          <text x="58" y="145">30</text><text x="58" y="205">15</text><text x="58" y="265">0</text>
+        </g>
+        <g font-family="var(--tele)" font-size="13" fill="var(--ink-2)" text-anchor="middle">
+          <text x="130" y="286">ATOMIC</text>
+          <text x="307" y="286">COMPOSITE</text><text x="307" y="300" font-size="11">SEEN</text>
+          <text x="484" y="286">COMPOSITE</text><text x="484" y="300" font-size="11">UNSEEN</text>
+        </g>
+        <!-- policy alone -->
+        <polyline id="lineBase" points="130,111 307,237 484,257" fill="none"
+          stroke="var(--ink)" stroke-width="2.5" stroke-dasharray="700" stroke-dashoffset="700"/>
+        <g id="dotsBase" opacity="0">
+          <circle cx="130" cy="111" r="5" fill="var(--ink)"/>
+          <circle cx="307" cy="237" r="5" fill="var(--ink)"/>
+          <circle cx="484" cy="257" r="5" fill="var(--ink)"/>
+          <g font-family="var(--tele)" font-size="14" fill="var(--ink)">
+            <text x="130" y="100" text-anchor="middle">37.2</text>
+            <text x="307" y="228" text-anchor="middle">5.8</text>
+            <text x="484" y="248" text-anchor="middle">0.7</text>
+          </g>
+        </g>
+        <!-- with runtime -->
+        <g id="grpRun" opacity="0" style="transition:opacity .7s">
+          <polyline points="130,64 307,114 484,146" fill="none" stroke="var(--sage)" stroke-width="3"/>
+          <circle cx="130" cy="64" r="5" fill="var(--sage)"/>
+          <circle cx="307" cy="114" r="5" fill="var(--sage)"/>
+          <circle cx="484" cy="146" r="5" fill="var(--sage)"/>
+          <g font-family="var(--tele)" font-size="14" fill="var(--sage)" font-weight="700">
+            <text x="130" y="53" text-anchor="middle">49.0</text>
+            <text x="307" y="103" text-anchor="middle">36.4</text>
+            <text x="484" y="135" text-anchor="middle">28.5</text>
+          </g>
+        </g>
+      </svg>
+      <div style="display:flex;gap:1rem;align-items:center;margin-top:1.1rem;flex-wrap:wrap">
+        <button class="btn" id="toggleRun">Add the runtime</button>
+        <span class="tele" id="runNote">Same frozen weights, both lines.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">The problem, stated once</span>
+    <div class="quote">
+      Given a manipulation policy whose weights are <em>frozen</em> after training, and a deployment stream whose instructions, viewpoints, embodiments and goals drift away from that training distribution, find the inference-time process — the loop that decides what to look at, what to attempt next, which controller should attempt it, and whether it worked — that maximises the probability of satisfying the task predicate within a bounded interaction budget. The optimisation variable is the <strong>loop</strong>, not the weights.
+    </div>
+    <p class="big" style="margin-top:1.8rem">No gradient is taken anywhere in this project. Adaptation happens once per episode, is written down, and can be undone.</p>
+
+    <div class="plate">
+      <div class="plate-h"><span>The objective</span><span>Search over loops, not weights</span></div>
+      <div class="obj">
+        <div class="eq">
+          max<span class="sub">Π ∈ 𝒫</span>&nbsp;&nbsp;𝔼<span class="sub">ℓ, ξ<span class="sub">0</span></span>
+          &nbsp;[&nbsp;max<span class="sub">t ≤ T</span>&nbsp;<i>ρ</i><span class="sub">ℓ</span>(<i>ξ</i><span class="sub">t</span>)&nbsp;]
+          <span class="under">probability the task predicate ever fires, within budget</span>
+        </div>
+        <div class="st">
+          subject to&nbsp;&nbsp;<i>θ</i> = <i>θ</i><span class="sub">0</span>
+          <span class="under">the policy is frozen; Π may only act by calling it</span>
+        </div>
+      </div>
+      <div class="legend">
+        <div><b>ξ<span class="sub">t</span></b><span>Hidden physical state of the scene at control step <i>t</i>.</span></div>
+        <div><b>z<span class="sub">t</span></b><span>What the robot can actually sense: two RGB-D views and its own joints.</span></div>
+        <div><b>u<span class="sub">t</span></b><span>One motor command — a Cartesian increment plus the gripper.</span></div>
+        <div><b>ℓ</b><span>The task, as a sentence. Drifts at deployment; the policy never sees it whole.</span></div>
+        <div><b>ρ<span class="sub">ℓ</span></b><span>The benchmark's own success test. Latching: once true, the episode succeeded.</span></div>
+        <div><b>κ<span class="sub">θ</span></b><span>The frozen policy, plus one analytic controller. Both take short subgoals only.</span></div>
+        <div><b>Π</b><span>The loop we are searching for — the whole contribution.</span></div>
+        <div><b>⟨E,&nbsp;Ψ,&nbsp;A,&nbsp;V⟩</b><span>Its four parts: registry, planner, scheduler, checker.</span></div>
+      </div>
+    </div>
+    <p class="big" style="margin-top:1.8rem;max-width:66ch">Two clocks run inside Π. The controllers close their loop at control rate; the four stations close theirs once per attempt. Everything on the next two pages is a claim about the slow clock.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">What is fixed, what adapts</span>
+    <div class="ledger">
+      <div>
+        <span class="tele">Frozen — never touched</span>
+        <ul>
+          <li><b>π₀.₅</b><span>The manipulation policy. Same checkpoint in every number on this site.</span></li>
+          <li><b>VLM</b><span>The planner. Open weights, self-hosted, no fine-tuning.</span></li>
+          <li><b>ENV</b><span>Benchmark task definitions, initial states, success predicates.</span></li>
+        </ul>
+      </div>
+      <div>
+        <span class="tele">Adapts — the whole contribution</span>
+        <ul>
+          <li><b>WHO</b><span>Which object each word refers to, held stable across the episode.</span></li>
+          <li><b>WHAT</b><span>Which subgoal comes next, and when the task is actually finished.</span></li>
+          <li><b>HOW</b><span>Which controller runs it, chosen from measured reliability.</span></li>
+          <li><b>IF</b><span>Whether it worked, decided from geometry rather than opinion.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Why the loop is the right variable</span>
+    <div class="grid g3">
+      <div class="cell">
+        <span class="tele">Evidence</span>
+        <p>The skills are already in the weights; the compositions are not. A policy at 37% on atomic tasks and 0.7% on unseen compositions is not short of motor skill.</p>
+      </div>
+      <div class="cell">
+        <span class="tele">Economics</span>
+        <p>Retraining needs new robot data, is global, and cannot be rolled back for one task. A runtime costs no data, is local to an episode, and is reversible.</p>
+      </div>
+      <div class="cell">
+        <span class="tele">Diagnosis</span>
+        <p>Every failure the loop records has a name: wrong object, wrong order, wrong moment to stop. Weight-space failures do not come with names.</p>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ══════════════ PAGE 2 ══════════════ -->
+<div class="page" id="p2" role="tabpanel">
+
+  <section>
+    <span class="eyebrow">Challenge</span>
+    <h2>Four ways a loop around a frozen policy quietly fails.</h2>
+    <p class="lede">Each one is cheap to build and expensive to notice.</p>
+
+    <div class="stack" style="margin-top:2.2rem">
+      <div class="card">
+        <button aria-expanded="false"><span class="k">C1</span><span class="t">Sight without memory</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">What happens</span>
+          <p>Re-detect the scene on every turn and the objects get new names every turn. "The bowl I moved two steps ago" cannot be said, because nothing survives between turns to say it about.</p>
+          <span class="note">What it costs</span>
+          <p>An occluded object is not hidden, it is deleted. Progress cannot be tracked symbolically, so it has to be re-derived from pixels inside the planner's context — the slowest, least reliable, most expensive place to put it.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">C2</span><span class="t">The judge is the actor</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">What happens</span>
+          <p>Show the after-image back to the same model that chose the action and ask whether it worked.</p>
+          <span class="note">What it costs</span>
+          <p>Judgement error is correlated with decision error, so the loop cannot bound its own optimism. It stops early, declares success on an unfinished task, and pays a full multimodal call per step for the privilege.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">C3</span><span class="t">Competence written by hand</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">What happens</span>
+          <p>Findings such as "this policy drops negations" or "this verb almost never succeeds" get measured once and frozen into a prompt as constants.</p>
+          <span class="note">What it costs</span>
+          <p>They are true, and they are knowledge about one policy on one benchmark. Swap either and the prompt is confidently wrong. A gain built on them is partly the gain from an expert having already studied the benchmark.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">C4</span><span class="t">Rented intelligence</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">What happens</span>
+          <p>A hosted frontier model is called once per decision, and a second hosted model is called to locate objects.</p>
+          <span class="note">What it costs</span>
+          <p>Money per trial and seconds per step, neither of which a robot control loop has. It also makes the result unreproducible for anyone without those two keys.</p>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Insight</span>
+    <h2>Five moves, each borrowed from a field that solved a version of this already.</h2>
+
+    <div class="stack" style="margin-top:2.2rem">
+      <div class="card">
+        <button aria-expanded="false"><span class="k">I1</span><span class="t">Move adaptation, do not remove it</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">Borrowed from</span>
+          <p>Supervisory control, which splits a slow decision loop from a fast tracking loop and lets each be designed for what it is good at.</p>
+          <span class="note">Consequence</span>
+          <p>Weight space is not the only place adaptation can live. The runtime is a second channel: closed-loop, per-episode, reversible, and carrying about ten numbers per situation instead of a billion.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">I2</span><span class="t">Memory belongs to objects, not sentences</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">Borrowed from</span>
+          <p>Multi-target tracking: gate by distance, match by cost, and <em>keep the track</em> when the measurement goes missing.</p>
+          <span class="note">Consequence</span>
+          <p>Identity becomes a property of the whole history instead of the current frame. Object #3 is the same physical thing all episode — after it moves, after it is picked up, after it disappears. Only then can anything be checked rather than re-argued.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">I3</span><span class="t">Geometry finds the things; language names them</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">Borrowed from</span>
+          <p>Class-agnostic segmentation, where finding an object does not require knowing its category.</p>
+          <span class="note">Consequence</span>
+          <p>Every physical thing on the table gets a row whether or not we have a word for it, so a missing row means genuinely not visible rather than merely unnamed. Naming happens downstream, so a wrong guess is revisable and never corrupts the state estimate.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">I4</span><span class="t">A checker must be independent, and allowed to abstain</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">Borrowed from</span>
+          <p>Runtime assertion checking in safety-critical software, where a sound checker answers "cannot decide" rather than guessing.</p>
+          <span class="note">Consequence</span>
+          <p>Three answers, not two: <span style="color:var(--sage);font-weight:700">verified</span>, <span style="color:var(--clay);font-weight:700">refuted</span>, <span style="color:var(--lilac);font-weight:700">cannot tell</span>. Hard verdicts wherever geometry decides; only the third answer goes back to the planner. Strictly stronger where it applies, and never weaker where it does not.</p>
+        </div></div>
+      </div>
+
+      <div class="card">
+        <button aria-expanded="false"><span class="k">I5</span><span class="t">Competence is measured, not declared</span><span class="pm">+</span></button>
+        <div class="body"><div class="inner">
+          <span class="note">Borrowed from</span>
+          <p>Risk-averse contextual bandits: be pessimistic where evidence is thin, and price the time a slow arm costs you.</p>
+          <span class="note">Consequence</span>
+          <p>The loop learns which controller suits which kind of subgoal from outcomes, described only by features that carry across robots — verb class, whether the target is named by a relation, measured object shape, clutter, and how many times we have already tried here. Retrying and escalating fall out of that last feature instead of being written as a rule.</p>
+        </div></div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:3rem">These are one mechanism, not five tricks</h3>
+    <div class="chain">
+      <div>Stable identity</div><span>→</span>
+      <div>Checkable claims</div><span>→</span>
+      <div>Honest success signal</div><span>→</span>
+      <div>Learnable scheduler</div>
+    </div>
+    <p>Remove the first and the last has nothing to learn from but the controller's own report — and a placement controller reports success as soon as its fingers open. The chain is why the ablations must be read together.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Novelty</span>
+    <h2>Where this sits.</h2>
+    <div class="tw">
+    <table>
+      <caption>Positioning against the alternatives</caption>
+      <thead><tr><th>Approach</th><th style="text-align:left">What it changes</th><th style="text-align:left">What we do instead</th></tr></thead>
+      <tbody>
+        <tr><td>Fine-tuning · DAgger · RL adaptation</td><td style="text-align:left;font-family:var(--body)">The weights, using new robot data</td><td style="text-align:left;font-family:var(--body)">No gradient. Adaptation is per-episode and reversible.</td></tr>
+        <tr><td>Program-writing agents</td><td style="text-align:left;font-family:var(--body)">Emits an open-loop plan from the first frame</td><td style="text-align:left;font-family:var(--body)">Re-measures after every attempt; a decidable check gates every step.</td></tr>
+        <tr><td>Hierarchical / dual-system policies</td><td style="text-align:left;font-family:var(--body)">Trains the high level too</td><td style="text-align:left;font-family:var(--body)">High level frozen. What adapts is a small posterior over controller reliability.</td></tr>
+        <tr><td>Hosted closed-loop agents</td><td style="text-align:left;font-family:var(--body)">Rents a frontier planner and a frontier detector</td><td style="text-align:left;font-family:var(--body)">Open weights, self-hosted, no detector at all — geometry replaces it.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h3 style="margin-top:2.6rem">New in how we measure, not only in what we build</h3>
+    <div class="grid g3" style="margin-top:1.2rem">
+      <div class="cell"><span class="tele">Sweep the policy</span><p>Prior work varies the planner and holds the policy fixed. We hold the loop fixed and vary the policy. It is the only way to learn whether a gain belongs to the loop or to one checkpoint.</p></div>
+      <div class="cell"><span class="tele">Report Λ, not Δ</span><p>Raw point gains are not comparable across benchmarks with different starting points. Λ is the share of the remaining headroom the runtime recovered, so 78% → 92% and 6% → 36% can be read on one scale.</p></div>
+      <div class="cell"><span class="tele">Declare the mode</span><p>Learning during evaluation is test-time adaptation. Cold, calibrated and online are run separately and never merged into a zero-shot claim.</p></div>
+    </div>
+  </section>
+</div>
+
+<!-- ══════════════ PAGE 3 ══════════════ -->
+<div class="page" id="p3" role="tabpanel">
+  <section>
+    <span class="eyebrow">Architecture</span>
+    <h2>Four stations and one rule: nobody grades their own work.</h2>
+    <p class="lede">Click a station to see what it owns. Then step an episode through all four.</p>
+
+    <div class="inst" style="margin-top:2.2rem">
+      <div class="stations" role="group" aria-label="Runtime stations">
+        <button class="st act" data-st="0"><span class="n">Station 01</span><span class="h">Registry</span><span class="d">Keeps one row per physical object, and keeps it across time.</span></button>
+        <button class="st" data-st="1"><span class="n">Station 02</span><span class="h">Planner</span><span class="d">Frozen vision–language model. Says what should be true next.</span></button>
+        <button class="st" data-st="2"><span class="n">Station 03</span><span class="h">Scheduler</span><span class="d">Picks the controller by measured reliability minus time cost.</span></button>
+        <button class="st" data-st="3"><span class="n">Station 04</span><span class="h">Checker</span><span class="d">Decides from geometry whether it actually happened.</span></button>
+      </div>
+      <div class="st-detail" id="stDetail"></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:2.4rem">
+      <div class="cell">
+        <span class="tele">Controller A — analytic</span>
+        <p>A self-calibrating Cartesian servo: hover, descend just below the object's top surface, close, lift. It measures its own command-to-motion gain during the episode, so the same code drives a different control rate or a different arm without retuning. It never claims a placement worked — that is the checker's job.</p>
+      </div>
+      <div class="cell">
+        <span class="tele">Controller B — the frozen policy</span>
+        <p>The learned policy, run on one short literal subgoal at a time for a bounded number of steps. It never sees the full task. It reports typed outcomes — budget exhausted, no motion, server error — because "ran out of time" and "never moved" mean completely different next moves upstairs.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Signature — episode tape</span>
+    <h2>One episode, six decisions, on the record.</h2>
+    <p class="lede">Task: <em>put the bowl that is on the plate into the basket</em>. Step through it. Watch identity hold, an attempt fail, and the escalation happen on its own.</p>
+
+    <div class="inst" style="margin-top:2rem">
+      <div class="tape">
+        <div class="tape-list">
+          <span class="tele" style="display:block;padding:.3rem .7rem .7rem">Macro steps</span>
+          <ol id="stepList"></ol>
+        </div>
+        <div class="tape-view">
+          <div class="pan">
+            <span class="tele">Object registry — ids persist for the whole episode</span>
+            <table class="reg"><tbody id="regBody"></tbody></table>
+          </div>
+          <div class="pan">
+            <span class="tele">Scheduler — utility = reliability − time cost</span>
+            <div class="sched" id="schedBox"></div>
+          </div>
+          <div class="pan">
+            <span class="tele">Checker</span>
+            <div class="verdict"><div id="stampBox"></div><div class="vnote" id="vnote"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="tape-ctl">
+        <button class="btn ghost" id="prevStep">Back</button>
+        <button class="btn" id="nextStep">Advance</button>
+        <button class="btn ghost" id="resetStep">Reset</button>
+        <span class="tele" id="tapeState">Step 1 of 6</span>
+      </div>
+    </div>
+
+    <div class="grid g3" style="margin-top:2.4rem">
+      <div class="cell"><span class="tele">What the planner never sees</span><p>No benchmark name, no object list, no claim about what this policy is bad at. The same prompt is valid for every policy we test — that is what makes the policy sweep meaningful.</p></div>
+      <div class="cell"><span class="tele">Why escalation is not a rule</span><p>How many times we have already tried is part of the situation the scheduler scores. After a refuted attempt the analytic arm's estimate drops and the learned arm wins on its own.</p></div>
+      <div class="cell"><span class="tele">Why disappearing can be success</span><p>For containment, an object vanishing under a container's rim is evidence <em>for</em> the claim, not against it. The checker handles that case explicitly; a picture-based judge usually calls it a failure.</p></div>
+    </div>
+  </section>
+</div>
+
+<!-- ══════════════ PAGE 4 ══════════════ -->
+<div class="page" id="p4" role="tabpanel">
+  <section>
+    <span class="eyebrow">Results</span>
+    <h2>Same weights. Same initial states. Different loop.</h2>
+    <p class="lede">Two benchmarks, chosen because they perturb different things: one moves the world around the policy, the other asks it to compose.</p>
+  </section>
+
+  <section>
+    <div class="res">
+      <div class="figcap">
+        <h3>LIBERO-plus · six perturbation axes</h3>
+        <span class="tele">Success rate, %</span>
+      </div>
+      <div class="tw">
+      <table>
+        <thead><tr><th>Perturbation</th><th>Policy alone</th><th>+ AdaBot</th><th>Δ</th><th>Λ</th></tr></thead>
+        <tbody>
+          <tr><td>Camera</td><td>78.4</td><td>92.2</td><td class="up">+13.8</td><td>63.9%</td></tr>
+          <tr><td>Robot</td><td>73.6</td><td>87.2</td><td class="up">+13.6</td><td>51.5%</td></tr>
+          <tr><td>Language</td><td>80.8</td><td>96.5</td><td class="up">+15.7</td><td>81.8%</td></tr>
+          <tr><td>Background</td><td>94.1</td><td>98.1</td><td class="up">+4.0</td><td>67.8%</td></tr>
+          <tr><td>Noise</td><td>89.0</td><td>94.4</td><td class="up">+5.4</td><td>49.1%</td></tr>
+          <tr><td>Layout</td><td>84.5</td><td>90.6</td><td class="up">+6.1</td><td>39.4%</td></tr>
+          <tr class="total"><td>Mean</td><td>83.4</td><td>93.2</td><td class="up">+9.8</td><td>58.8%</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="bars" id="barsA"></div>
+      <div class="key"><span><i style="background:var(--rule)"></i>Policy alone</span><span><i style="background:var(--sage)"></i>Recovered by the runtime</span></div>
+      <p class="big" style="margin-top:1.6rem;max-width:70ch"><strong>Read it by axis.</strong> The gain concentrates where the <em>referent</em> moves — camera pose, embodiment, instruction wording — and shrinks to a few points where only pixels move. Backgrounds and sensor noise were never the bottleneck; the policy was already near ceiling there. Deciding was.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="res">
+      <div class="figcap">
+        <h3>RoboCasa365 · composition depth</h3>
+        <span class="tele">Success rate, %</span>
+      </div>
+      <div class="tw">
+      <table>
+        <thead><tr><th>Split</th><th>Policy alone</th><th>+ AdaBot</th><th>Δ</th><th>Λ</th></tr></thead>
+        <tbody>
+          <tr><td>Atomic</td><td>37.2</td><td>49.0</td><td class="up">+11.8</td><td>18.8%</td></tr>
+          <tr><td>Composite — seen</td><td>5.8</td><td>36.4</td><td class="up">+30.6</td><td>32.5%</td></tr>
+          <tr><td>Composite — unseen</td><td>0.7</td><td>28.5</td><td class="up">+27.8</td><td>28.0%</td></tr>
+          <tr class="total"><td>Mean</td><td>14.6</td><td>38.0</td><td class="up">+23.4</td><td>27.4%</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="bars" id="barsB"></div>
+      <div class="key"><span><i style="background:var(--rule)"></i>Policy alone</span><span><i style="background:var(--sage)"></i>Recovered by the runtime</span></div>
+      <p class="big" style="margin-top:1.6rem;max-width:70ch"><strong>Read it by depth.</strong> The harder the composition, the larger the recovery. On unseen compositions the policy alone is at 0.7% — indistinguishable from zero — and the loop brings it to 28.5%. The runtime supplies precisely what the weights do not carry: order, memory of what is already done, and knowing when to stop.</p>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">How the numbers were taken</span>
+    <div class="grid g3">
+      <div class="cell"><span class="tele">Paired</span><p>Both arms run the same tasks from the same benchmark initial states, so every comparison is paired trial by trial rather than sampled independently.</p></div>
+      <div class="cell"><span class="tele">Unmodified predicate</span><p>Success is the benchmark's own predicate. The runtime's verdicts are logged for audit but never substituted for it.</p></div>
+      <div class="cell"><span class="tele">Λ, defined</span><p>Λ = Δ ÷ (100 − baseline): the share of what was still missing that the runtime recovered. It lets a 94% axis and a 0.7% split be compared honestly.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Plan</span>
+    <h2>What is settled, and what we still owe.</h2>
+    <ul class="chk">
+      <li><span class="s done">Settled</span><span class="txt">Camera model chosen by measurement, not assumption — four conventions scored against ground-truth poses; the winner lands at 4.6 cm median against 9.6 cm and two that are metres off.</span></li>
+      <li><span class="s done">Settled</span><span class="txt">Identity survives the adversarial cases: two objects that trade places keep their names, two identical objects that trade places do not fragment. 71 unit tests, all green.</span></li>
+      <li><span class="s done">Settled</span><span class="txt">Both benchmarks above, against the same frozen policy.</span></li>
+      <li><span class="s run">In flight</span><span class="txt">Ablations, one command-line flag per row: identity off, checker off, scheduler off, images off. The last one asks how much of the task the symbolic state alone can carry.</span></li>
+      <li><span class="s run">In flight</span><span class="txt">Checker audit — how often a verified claim was not actually true. The target is zero, and it is the number that decides whether the reward signal was honest.</span></li>
+      <li><span class="s next">Next</span><span class="txt">Policy sweep across two further frozen policies, reported in Λ so the three are comparable. This is the test of whether the gain belongs to the loop.</span></li>
+      <li><span class="s next">Next</span><span class="txt">Cold, calibrated and online reported as three separate columns, never averaged.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <span class="eyebrow">Cost</span>
+    <div class="grid g2">
+      <div class="cell"><span class="tele">Per trial</span><p>No API spend. The planner is open weights on one local GPU, the policy servers on two more, four simulators on the rest — one allocation, everything inside it. The marginal cost of a trial is the GPU time it occupies.</p></div>
+      <div class="cell"><span class="tele">Per decision</span><p>The checker replaces one multimodal call per step with a geometric test, and the persistent registry replaces re-describing the scene in tokens. Both were built for reliability; both happen to be what makes an 8B planner viable.</p></div>
+    </div>
+  </section>
+</div>
+
+</main>
+
+<footer>
+  <span>AdaBot · closed-loop inference for robot runtime adaptation</span>
+  <span>Bodoni Moda · Spectral · Courier Prime</span>
+</footer>
+
+<script>
+/* ── rail ticks ─────────────────────────────────────── */
+(function(){
+  const t=document.getElementById('ticks');if(!t)return;
+  let h='';for(let i=0;i<40;i++){h+=`<i class="${i%5===0?'maj':''}" style="top:${i*2.5}%"></i>`}
+  t.innerHTML=h;
+})();
+
+/* ── tabs ───────────────────────────────────────────── */
+const tabs=[...document.querySelectorAll('.tab')],pages=[...document.querySelectorAll('.page')];
+const railMark=document.getElementById('railMark');
+tabs.forEach(tb=>tb.addEventListener('click',()=>{
+  tabs.forEach(x=>x.setAttribute('aria-selected',String(x===tb)));
+  pages.forEach(p=>p.classList.toggle('on',p.id===tb.dataset.p));
+  railMark.textContent=tb.textContent;
+  window.scrollTo({top:0,behavior:'instant'});
+  if(tb.dataset.p==='p4')drawBars();
+}));
+
+/* ── hero toggle ────────────────────────────────────── */
+(function(){
+  const line=document.getElementById('lineBase'),dots=document.getElementById('dotsBase'),
+        run=document.getElementById('grpRun'),btn=document.getElementById('toggleRun'),
+        note=document.getElementById('runNote');
+  line.style.transition='stroke-dashoffset 1.1s cubic-bezier(.2,.8,.3,1)';
+  dots.style.transition='opacity .5s .9s';
+  requestAnimationFrame(()=>{setTimeout(()=>{line.style.strokeDashoffset='0';dots.style.opacity='1'},220)});
+  let on=false;
+  btn.addEventListener('click',()=>{
+    on=!on;run.style.opacity=on?'1':'0';
+    btn.textContent=on?'Remove the runtime':'Add the runtime';
+    btn.classList.toggle('on',on);
+    note.textContent=on?'Same frozen weights. Mean 14.6 → 38.0.':'Same frozen weights, both lines.';
+  });
+})();
+
+/* ── accordions ─────────────────────────────────────── */
+document.querySelectorAll('.card').forEach(card=>{
+  const btn=card.querySelector('button'),body=card.querySelector('.body');
+  btn.addEventListener('click',()=>{
+    const open=card.hasAttribute('open');
+    if(open){card.removeAttribute('open');body.style.maxHeight='0';btn.setAttribute('aria-expanded','false');}
+    else{card.setAttribute('open','');body.style.maxHeight=body.scrollHeight+'px';btn.setAttribute('aria-expanded','true');}
+  });
+});
+
+/* ── stations ───────────────────────────────────────── */
+const STATIONS=[
+ {t:'Registry',b:`<p>Objects come from geometry, not from a text-conditioned detector: fit the table, keep what stands on it, drop the arm, and split what remains into connected regions. Every physical thing gets a row whether or not we have a word for it.</p>
+ <p>Each region is then matched to an existing track by position <em>and</em> appearance together, with a hard rule: two things that look this different cannot be the same object however close they are. Without that rule, two objects trading places have their names silently swapped, because a zero-distance match always beats a correct-colour one ten centimetres away.</p>
+ <p>An object that stops being seen is not deleted. It stays on the books with its last known position, which is the only reason "it must be underneath that" is a thing the system can say.</p>`},
+ {t:'Planner',b:`<p>A frozen vision–language model reads the registry as a short table plus the two camera views, and issues one declarative step: <em>this should now be true, about these objects</em>. It states goals; it never names a controller.</p>
+ <p>It owns exactly what needs world knowledge — which object the words point at, what order things must happen in, and whether the instruction has actually been satisfied. It also names objects; naming is downstream of identity, so a wrong guess is revisable.</p>
+ <p>It cannot declare the task finished without looking first. That guard is enforced by the loop, not requested in the prompt.</p>`},
+ {t:'Scheduler',b:`<p>Every controller carries an estimate of how often it succeeds in this <em>kind</em> of situation — described only by things that transfer: the verb, whether the target is named by a relation, whether there is a negation, the measured shape of the target, how crowded it is, and how many attempts we have already spent here.</p>
+ <p>It picks by a pessimistic estimate minus a price on time, so a slow controller is chosen only when it is materially more likely to work. Thin evidence makes it cautious rather than confident.</p>
+ <p>What it learns, and when, is declared: priors only, fitted on a separate split and frozen, or updated live. Those three are never averaged together.</p>`},
+ {t:'Checker',b:`<p>The subgoal is compiled into a claim about the registry — inside, on, held, moved, empty — using the ids the planner itself named, never re-read from the text. Re-reading would let a hallucinated target back in through the verification door.</p>
+ <p>The claim is then evaluated geometrically, with three possible answers. "Cannot tell" is a first-class answer, reserved for things geometry has no business judging, such as whether a drawer is open. Only that answer goes back to the planner.</p>
+ <p>Holding is read from the gripper width sensor, not from a picture. A controller that opened its fingers has not thereby placed anything.</p>`}
+];
+const stDetail=document.getElementById('stDetail');
+function showStation(i){
+  document.querySelectorAll('.st').forEach((s,j)=>s.classList.toggle('act',j===i));
+  stDetail.innerHTML=STATIONS[i].b;
+}
+document.querySelectorAll('.st').forEach(s=>s.addEventListener('click',()=>showStation(+s.dataset.st)));
+showStation(0);
+
+/* ── episode tape ───────────────────────────────────── */
+const R=(id,n,st,x,y,z,h)=>({id,n,st,p:`${x}, ${y}, ${z}`,h});
+const BASE=[R(0,'basket','visible','0.112','0.284','0.918','0.094'),
+            R(1,'plate','visible','−0.043','0.161','0.906','0.012'),
+            R(2,'bowl','visible','−0.041','0.158','0.921','0.041'),
+            R(3,'mug','visible','0.207','−0.055','0.928','0.083')];
+const clone=a=>a.map(o=>({...o}));
+const held=()=>{const a=clone(BASE);a[2].st='HELD';a[2].p='0.036, 0.104, 1.031';return a};
+const rim =()=>{const a=clone(BASE);a[2].st='visible';a[2].p='0.118, 0.281, 0.968';return a};
+const gone=()=>{const a=clone(BASE);a[2].st='hidden(1)';a[2].p='0.110, 0.283, 0.930';return a};
+const gone2=()=>{const a=clone(BASE);a[2].st='hidden(2)';a[2].p='0.110, 0.283, 0.930';return a};
+
+const STEPS=[
+ {op:'OBSERVE',st:0,reg:BASE,sched:null,v:'none',
+  vn:'Nothing to check yet. Four objects enter the registry and keep these ids for the rest of the episode. The bowl sits on the plate — the loop can see that without being told.'},
+ {op:'COMMIT',sub:'pick up the bowl · #2',st:2,reg:held(),
+  sched:{a:0.60,b:0.24,win:'a',note:'isolated rigid target, first attempt'},v:'V',
+  vn:'<b>held(#2)</b> — the gripper width sensor reads a blocked close. Deterministic; no picture was consulted.'},
+ {op:'COMMIT',sub:'put the bowl in the basket · #2 → #0',st:2,reg:rim(),
+  sched:{a:0.60,b:0.24,win:'a',note:'same situation, so the same choice'},v:'R',
+  vn:'<b>inside(#2, #0)</b> refuted — #2 is 5 cm above the basket rim and outside its footprint. It landed on the edge. The planner is told what is wrong, not merely that something is.'},
+ {op:'COMMIT',sub:'put the bowl in the basket · retry',st:2,reg:gone(),
+  sched:{a:0.27,b:0.28,win:'b',note:'attempt index rose — the analytic estimate drops and the learned policy wins'},v:'V',
+  vn:'<b>inside(#2, #0)</b> verified — #2 is no longer a separate region, and its last known position lies inside the basket footprint. For containment, disappearing is evidence <em>for</em> the claim.'},
+ {op:'OBSERVE',st:0,reg:gone2(),sched:null,v:'none',
+  vn:'#2 is still on the books as hidden, with its last position. A memoryless view would have deleted it here and lost the only record that the task was completed.'},
+ {op:'HALT',st:1,reg:gone2(),sched:null,v:'none',
+  vn:'Accepted — the previous call was an observation, so the decision was made against a fresh measurement. The benchmark predicate agrees.'}
+];
+
+const stepList=document.getElementById('stepList'),regBody=document.getElementById('regBody'),
+      schedBox=document.getElementById('schedBox'),stampBox=document.getElementById('stampBox'),
+      vnote=document.getElementById('vnote'),tapeState=document.getElementById('tapeState');
+let cur=0;
+
+stepList.innerHTML=STEPS.map((s,i)=>
+ `<li><button class="step" data-i="${i}"><span class="i">${String(i+1).padStart(2,'0')}</span>
+  <span class="o">${s.op}${s.sub?`<br><span style="font-family:var(--body);text-transform:none;letter-spacing:0;font-size:.92rem;color:var(--ink-2)">${s.sub}</span>`:''}</span></button></li>`).join('');
+
+function render(i){
+  cur=i;const s=STEPS[i];
+  document.querySelectorAll('.step').forEach((b,j)=>b.classList.toggle('act',j===i));
+  showStation(s.st);
+  regBody.innerHTML=s.reg.map(o=>{
+    const cls=o.st==='HELD'?'held':(o.st.startsWith('hidden')?'hid':'');
+    return `<tr class="${cls}"><td>#${o.id}</td><td>${o.n}</td>
+      <td><span class="pill">${o.st}</span></td><td class="r">${o.p}</td><td class="r">h ${o.h}</td></tr>`}).join('');
+  if(s.sched){
+    schedBox.innerHTML=`
+      <div class="sr ${s.sched.win==='a'?'win':''}"><span class="lab">analytic servo</span>
+        <span class="tr"><span class="fl" style="background:var(--sage)"></span></span><span>${s.sched.a.toFixed(2)}</span></div>
+      <div class="sr ${s.sched.win==='b'?'win':''}"><span class="lab">frozen policy</span>
+        <span class="tr"><span class="fl" style="background:var(--dust)"></span></span><span>${s.sched.b.toFixed(2)}</span></div>
+      <p style="font-size:.94rem;color:var(--ink-2);margin:.3rem 0 0">${s.sched.note}</p>`;
+    requestAnimationFrame(()=>{const f=schedBox.querySelectorAll('.fl');
+      f[0].style.width=(s.sched.a/0.7*100)+'%';f[1].style.width=(s.sched.b/0.7*100)+'%';});
+  } else {
+    schedBox.innerHTML=`<p style="font-size:.96rem;color:var(--ink-2);margin:0">No controller was scheduled on this step.</p>`;
+  }
+  const M={V:['v','VERIFIED'],R:['r','REFUTED'],U:['u','CANNOT TELL'],none:['n','NOT APPLICABLE']};
+  const [c,l]=M[s.v];stampBox.innerHTML=`<span class="stamp ${c}">${l}</span>`;
+  vnote.innerHTML=s.vn;
+  tapeState.textContent=`Step ${i+1} of ${STEPS.length}`;
+  document.getElementById('prevStep').disabled=i===0;
+  document.getElementById('nextStep').disabled=i===STEPS.length-1;
+}
+document.getElementById('stepList').addEventListener('click',e=>{
+  const b=e.target.closest('.step');if(b)render(+b.dataset.i);});
+document.getElementById('nextStep').addEventListener('click',()=>render(Math.min(cur+1,STEPS.length-1)));
+document.getElementById('prevStep').addEventListener('click',()=>render(Math.max(cur-1,0)));
+document.getElementById('resetStep').addEventListener('click',()=>render(0));
+render(0);
+
+/* ── result bars ────────────────────────────────────── */
+const A=[['Camera',78.4,92.2],['Robot',73.6,87.2],['Language',80.8,96.5],
+         ['Background',94.1,98.1],['Noise',89.0,94.4],['Layout',84.5,90.6]];
+const B=[['Atomic',37.2,49.0],['Composite — seen',5.8,36.4],['Composite — unseen',0.7,28.5]];
+function mk(box,rows){
+  box.innerHTML=rows.map(([l,a,b])=>`
+    <div class="bar"><span class="lab">${l}</span>
+      <span class="track"><span class="base" data-w="${a}"></span><span class="gain" data-l="${a}" data-w="${b-a}"></span></span>
+      <span class="num">${b.toFixed(1)}</span></div>`).join('');
+}
+mk(document.getElementById('barsA'),A);mk(document.getElementById('barsB'),B);
+let drawn=false;
+function drawBars(){
+  if(drawn)return;drawn=true;
+  setTimeout(()=>{
+    document.querySelectorAll('.bar .base').forEach(e=>e.style.width=e.dataset.w+'%');
+    document.querySelectorAll('.bar .gain').forEach(e=>{e.style.left=e.dataset.l+'%';e.style.width=e.dataset.w+'%';});
+  },120);
+}
+</script>
+</body>
+</html>
